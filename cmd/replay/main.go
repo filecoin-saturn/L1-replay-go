@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	_ "io/ioutil"
@@ -20,6 +21,17 @@ import (
 
 const LOG_FILE = "logs/logs.ndjson"
 
+type Options struct {
+	LogFilePath     string `json:"logFilePath"`
+	DurationMinutes int    `json:"durationMinutes"`
+	NumLogs         int    `json:"numLogs"`
+	NumClients      int    `json:"numClients"`
+	ClientPerFormat bool   `json:"clientPerFormat"`
+	HttpVersion     int    `json:"httpVersion"`
+	IpAddress       string `json:"ipAddress"`
+}
+
+
 type Log struct {
 	Status   int    `json:"status"`
 	URL          *url.URL  `json:"url"`
@@ -35,7 +47,7 @@ type Metric struct {
 	TTFBMs   Percentiles `json:"ttfb_ms"`
 	DurationMs   Percentiles `json:"duration_ms"`
 	NumLogs  int `json:"numLogs"`
-	Errors   map[string]int `json:"errors"`
+	Errors   map[string]int `json:"errors,omitempty"`
 }
 
 type Percentiles struct {
@@ -46,8 +58,8 @@ type Percentiles struct {
 }
 
 type Info struct {
-	IPAddress  string     `json:"ipAddress"`
-	HTTPVersion int        `json:"httpVersion"`
+	Options    *Options `json:"options"`
+	Language   string  `json:"language"`
 	Date       time.Time `json:"date"`
 	NumLogs    int        `json:"numLogs"`
 	Metrics    []Metric `json:"metrics"`
@@ -86,8 +98,8 @@ func (l *Log) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func getModifiedLogs(logFilePath string, ipAddress string, maxDurationMinutes int, maxLogs int, useTLS bool) ([]Log, error) {
-    f, err := os.Open(logFilePath)
+func getModifiedLogs(opts *Options) ([]Log, error) {
+    f, err := os.Open(opts.LogFilePath)
     if err != nil {
         return nil, err
     }
@@ -111,7 +123,7 @@ func getModifiedLogs(logFilePath string, ipAddress string, maxDurationMinutes in
         }
 
 		// TODO: TESTING
-		// if !log.CacheHit || log.Status != 200 {
+		// if !log.CacheHit || log.Status != 200 || log.Format != "raw" {
 		// 	continue
 		// }
 
@@ -124,25 +136,20 @@ func getModifiedLogs(logFilePath string, ipAddress string, maxDurationMinutes in
         }
         log.StartTime = originalTimestamp.Add(offset)
 
-        if ipAddress != "" {
-            log.URL.Host = ipAddress
-        }
-        if useTLS {
-            log.URL.Scheme = "https"
-        } else {
-            log.URL.Scheme = "http"
+        if opts.IpAddress != "" {
+            log.URL.Host = opts.IpAddress
         }
         logs = append(logs, log)
 
-        if !oldestTimestamp.IsZero() && maxDurationMinutes != 0 {
+        if !oldestTimestamp.IsZero() && opts.DurationMinutes != 0 {
             durationSoFar := originalTimestamp.Sub(oldestTimestamp)
-            if durationSoFar.Minutes() > float64(maxDurationMinutes) {
+            if durationSoFar.Minutes() > float64(opts.DurationMinutes) {
                 break
             }
         }
         count++
 
-        if maxLogs != 0 && count >= maxLogs {
+        if opts.NumLogs != 0 && count >= opts.NumLogs {
             break
         }
     }
@@ -150,7 +157,7 @@ func getModifiedLogs(logFilePath string, ipAddress string, maxDurationMinutes in
     return logs, nil
 }
 
-func replayLogs(logs []Log, httpVersion int) ([]RequestResult, error) {
+func replayLogs(logs []Log, opts *Options) ([]RequestResult, error) {
 	var wg sync.WaitGroup
 	var mutex sync.Mutex
 	var results []RequestResult
@@ -164,7 +171,7 @@ func replayLogs(logs []Log, httpVersion int) ([]RequestResult, error) {
 			wg.Add(1)
 			go func(log Log) {
 				defer wg.Done()
-				result := sendRequest(log, httpVersion)
+				result := sendRequest(log, opts)
 
 				mutex.Lock()
 				results = append(results, result)
@@ -258,30 +265,30 @@ func calcPercentile (values []float64, percent float64) float64 {
 	return result
 }
 
-func replay(logFilePath string, ipAddress string, maxDurationMinutes int, maxLogs int, httpVersion int, useTLS bool) error {
-    logs, err := getModifiedLogs(logFilePath, ipAddress, maxDurationMinutes, maxLogs, useTLS)
+func replay(opts *Options) error {
+    logs, err := getModifiedLogs(opts)
     if err != nil {
         return err
     }
 
-    results, err := replayLogs(logs, httpVersion)
+    results, err := replayLogs(logs, opts)
     if err != nil {
         return err
     }
     metrics := calcMetrics(results)
 
+	ipAddress := opts.IpAddress
     if ipAddress == "" {
         ipAddress = logs[0].URL.Hostname()
     }
 
-    info := map[string]interface{}{
-        "ipAddress":  ipAddress,
-        "httpVersion": httpVersion,
-		"lang"       : "Go",
-        "date":        time.Now(),
-        "numLogs":     len(logs),
-        "metrics":     metrics,
-    }
+	info := Info{
+		opts,
+		"Go",
+		time.Now(),
+		len(logs),
+		metrics,
+	}
 
     b, err := json.MarshalIndent(info, "", "  ")
     if err != nil {
@@ -296,39 +303,37 @@ func replay(logFilePath string, ipAddress string, maxDurationMinutes int, maxLog
     return nil
 }
 
-func main() {
-    args := os.Args[1:]
-    cmd := args[0]
+func parseOptions() *Options {
+    var logFilePath, ipAddress string
+    var durationMinutes, numLogs, numClients, httpVersion int
+    var clientPerFormat bool
 
-    switch cmd {
-    case "replay":
-        logFilePath := getFlagValue(args, "f", LOG_FILE)
-        maxDurationMinutesStr := getFlagValue(args, "d", "")
-        maxDurationMinutes, _ := strconv.Atoi(maxDurationMinutesStr)
-        maxLogsStr := getFlagValue(args, "n", "")
-        maxLogs, _ := strconv.Atoi(maxLogsStr)
-        ipAddress := getFlagValue(args, "ip", "")
-        httpVersionStr := getFlagValue(args, "http", "1")
-        httpVersion, _ := strconv.Atoi(httpVersionStr)
-        useTLSStr := getFlagValue(args, "tls", "true")
-        useTLS, _ := strconv.ParseBool(useTLSStr)
+    flag.StringVar(&logFilePath, "f", LOG_FILE, "path to log file")
+    flag.IntVar(&durationMinutes, "d", 0, "duration of test based on log timestampts (not wall clock time)")
+    flag.IntVar(&numLogs, "n", 0, "number of logs to replay")
+    flag.IntVar(&numClients, "c", 1, "number of concurrent clients to simulate")
+    flag.BoolVar(&clientPerFormat, "clientPerFormat", false, "use separate clients for each log format")
+    flag.IntVar(&httpVersion, "http", 1, "HTTP version to use")
+    flag.StringVar(&ipAddress, "ip", "", "IP address of L1 node")
+    flag.Parse()
 
-        replay(logFilePath, ipAddress, maxDurationMinutes, maxLogs, httpVersion, useTLS)
+    return &Options{
+        LogFilePath:     logFilePath,
+        DurationMinutes: durationMinutes,
+        NumLogs:         numLogs,
+        NumClients:      numClients,
+        ClientPerFormat: clientPerFormat,
+        HttpVersion:     httpVersion,
+        IpAddress:       ipAddress,
     }
 }
 
-func getFlagValue(args []string, flagName string, defaultValue string) string {
-    index := -1
-    for i, arg := range args {
-        if arg == "-"+flagName || arg == "--"+flagName {
-            index = i
-            break
-        }
-    }
-
-    if index != -1 && len(args) > index+1 {
-        return args[index+1]
-    }
-
-    return defaultValue
+// go run cmd/replay/*.go -n 3 -http 2 -ip 51.161.35.66 -c 1
+//
+// Core L1 montreal: 51.161.35.66
+// Core Ly NYC: 138.199.41.51
+func main() {
+	opts := parseOptions()
+	initHttpClients(opts.NumClients)
+	replay(opts)
 }
