@@ -44,10 +44,87 @@ func TestGatewayCar(t *testing.T) {
 						Equals("none"),
 				).Body(
 					IsCar().
-					 	HasRoot(fixture.MustGetCid("subdir", "ascii.txt")).
-						HasBlock(fixture.MustGetCid("subdir", "ascii.txt")).
+					 	HasRoot(fixture.MustGetCid()).
+						HasBlocks(
+							fixture.MustGetCid(),
+							fixture.MustGetCid("subdir"),
+							fixture.MustGetCid("subdir", "ascii.txt"),
+						).
 						Exactly().
-						InThatOrder(),	
+						InThatOrder(),
+				),
+		},
+		{
+			Name: "GET with ?format=car&car-scope=block params returns expected blocks",
+			Hint: `
+				car-scope=block should return a CAR file with only the root block and a
+				block for each optional path component.
+			`,
+			Request: Request().
+				Path("ipfs/%s/subdir/ascii.txt", fixture.MustGetCid()).
+				Query("format", "car").
+				Query("car-scope", "block"),
+			Response: Expect().
+				Status(200).
+				Body(
+					IsCar().
+					HasRoot(fixture.MustGetCid()).
+					HasBlocks(
+						fixture.MustGetCid(),
+						fixture.MustGetCid("subdir"),
+						fixture.MustGetCid("subdir", "ascii.txt"),
+					).
+					Exactly().
+					InThatOrder(),
+				),
+		},
+		{
+			Name: "GET with ?format=car&car-scope=file params returns expected blocks",
+			Hint: `
+				car-scope=file should return a CAR file with all the blocks needed to 'cat'
+				a UnixFS file at the end of the specified path, or to 'ls' a UnixFS directory
+				at the end of the specified path.
+			`,
+			Request: Request().
+				Path("ipfs/%s", fixture.MustGetCid()).
+				Query("format", "car").
+				Query("car-scope", "file"),
+			Response: Expect().
+				Status(200).
+				Body(
+					IsCar().
+					HasRoot(fixture.MustGetCid()).
+					HasBlocks(
+						fixture.MustGetCid(),
+						fixture.MustGetCid("subdir"),
+						fixture.MustGetCid("subdir", "ascii.txt"),
+					).
+					Exactly().
+					InThatOrder(),
+				),
+		},
+		{
+			Name: "GET with ?format=car&car-scope=all params returns expected blocks",
+			Hint: `
+				car-scope=all should return a CAR file with the entire contiguous DAG
+				that begins at the end of the path query, after blocks required to verify path segments.
+			`,
+			Request: Request().
+				Path("ipfs/%s/subdir", fixture.MustGetCid()).
+				Query("format", "car").
+				Query("car-scope", "all"),
+			Response: Expect().
+				Status(200).
+				Body(
+					IsCar().
+					HasRoot(fixture.MustGetCid()).
+					HasBlocks(
+						fixture.MustGetCid(),
+						fixture.MustGetCid("subdir"),
+						fixture.MustGetCid("subdir", "ascii.txt"),
+					).
+					Exactly().
+					InThatOrder(),
 				),
 		},
 	}
