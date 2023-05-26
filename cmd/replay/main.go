@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	_ "io/ioutil"
+	"math/rand"
 	"net/url"
 	"os"
 	"sort"
@@ -115,7 +116,9 @@ func getModifiedLogs(opts *Options) ([]Log, error) {
         line := scanner.Text()
         var log Log
         if err := json.Unmarshal([]byte(line), &log); err != nil {
-			fmt.Println(err)
+			if !strings.Contains(err.Error(), "invalid control character in URL") {
+				fmt.Println(err)
+			}
             continue
         }
 		if log.Format == "" {
@@ -161,15 +164,20 @@ func replayLogs(logs []Log, opts *Options) ([]RequestResult, error) {
 	var wg sync.WaitGroup
 	var mutex sync.Mutex
 	var results []RequestResult
+	start := time.Now()
+
+	numReqs := float32(0)
+	numBytes := 0
 
 	for i := 0; i < len(logs); {
 		log := logs[i]
 
 		if log.StartTime.Before(time.Now()) {
 			i++
+			numReqs++
 
 			wg.Add(1)
-			go func(log Log) {
+			go func(log Log, index int) {
 				defer wg.Done()
 				result := sendRequest(log, opts)
 
@@ -178,8 +186,18 @@ func replayLogs(logs []Log, opts *Options) ([]RequestResult, error) {
 				mutex.Unlock()
 
 				progress := float64(i) / float64(len(logs)) * 100.0
-				fmt.Printf("%d, %.2f%%, %+v\n", i, progress, result)
-			}(log)
+				numBytes += result.ResponseSize
+				numMB := float32(numBytes) / float32(1048576)
+
+				durationSec := (int(time.Since(start).Seconds()))
+				reqPerSec := float32(0)
+				bandwidth := float32(0)
+				if durationSec > 0 {
+					bandwidth = numMB / float32(time.Since(start).Seconds())
+					reqPerSec = numReqs / float32(durationSec)
+				}
+				fmt.Printf("%d, %.2f%%, %.2f r/s, %.2f mb/s, %+v\n", index, progress, reqPerSec, bandwidth, result)
+			}(log, i)
 		} else {
 			time.Sleep(time.Millisecond * 1)
 		}
@@ -333,6 +351,8 @@ func parseOptions() *Options {
 // Core L1 montreal: 51.161.35.66
 // Core Ly NYC: 138.199.41.51
 func main() {
+    rand.Seed(time.Now().UnixNano())
+
 	opts := parseOptions()
 	initHttpClients(opts.NumClients)
 	replay(opts)

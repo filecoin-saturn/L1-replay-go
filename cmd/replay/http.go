@@ -2,12 +2,11 @@ package main
 
 import (
 	"crypto/tls"
-	_ "fmt"
-	"io"
 	"io/ioutil"
 	"math/rand"
 
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"time"
 
@@ -32,8 +31,8 @@ func makeHttp1ClientSet(count int) []*http.Client {
             Timeout: time.Duration(TIMEOUT_SEC) * time.Second,
             Transport: &http.Transport{
                 MaxIdleConns:        1000,
-                MaxConnsPerHost:     200,
-                MaxIdleConnsPerHost: 100,
+                MaxConnsPerHost:     1000,
+                MaxIdleConnsPerHost: 1000,
                 IdleConnTimeout:     90 * time.Second,
                 TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
             },
@@ -51,7 +50,11 @@ func makeHttp2ClientSet(count int) []*http.Client {
                 TLSClientConfig:    &tls.Config{InsecureSkipVerify: true},
                 DisableCompression: true,
                 AllowHTTP:           true,
-                //MaxReadFrameSize:     262144, // defaults to 16k
+               // MaxReadFrameSize:     262144 * 4, // defaults to 16k
+                CountError: func(errType string) {
+                    println(errType)
+                },
+
             },
         }
     }
@@ -75,9 +78,10 @@ func acceptHeader(format string) string {
 }
 
 // sudo tcptrack -i eth0 "dst 51.161.35.66"
+// iftop -f "src 70.95.27.225 && dst port 443" -P -n
 func sendRequest(log Log, opts *Options) RequestResult {
     start := time.Now()
-    var ttfb int
+    var ttfb int64
     var cacheHit bool
     var requestErr error
     var status int
@@ -114,48 +118,37 @@ func sendRequest(log Log, opts *Options) RequestResult {
     if err != nil {
         panic(err)
     }
+
+
+    trace := &httptrace.ClientTrace{
+        GotFirstResponseByte: func() {
+            ttfb = time.Since(start).Milliseconds()
+        },
+    }
+
+    req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
     req.Header = headers
     resp, err := client.Do(req)
     if err != nil {
         requestErr = err
     }
 
-    buffer := make([]byte, 1024)
-
     if resp != nil {
-        for {
-            n, err := resp.Body.Read(buffer)
-
-            if n > 0 {
-                if ttfb == 0 {
-                    ttfb = int(time.Since(start).Milliseconds())
-                }
-                responseSize += n
-            }
-
-            if n == 0 || err != nil {
-                if err != io.EOF {
-                    requestErr = err
-                }
-                break
-            }
-
-            if responseSize >= MAX_DOWNLOAD_BYTES {
-                break
-            }
+        body, err := ioutil.ReadAll(resp.Body)
+        if err != nil {
+            requestErr = err
         }
-
+        responseSize = len(body)
         status = resp.StatusCode
         cacheHit = resp.Header.Get("saturn-cache-status") == "HIT"
 
-        io.Copy(ioutil.Discard, resp.Body) // ensure body is fully read so conn can be reused
         resp.Body.Close()
     }
 
     duration := int64(time.Since(start).Milliseconds())
 
     result := RequestResult{
-        ttfb,
+        int(ttfb),
         cacheHit,
         status,
         log.Format,
