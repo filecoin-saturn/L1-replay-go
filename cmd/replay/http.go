@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/tls"
 	"io/ioutil"
-	"math/rand"
 
 	"net/http"
 	"net/http/httptrace"
@@ -20,51 +19,29 @@ const (
     TIMEOUT_SEC = 60
 )
 
-var http1Clients []*http.Client
-var http2Clients []*http.Client
-var http2ClientsRaw []*http.Client
-
-func makeHttp1ClientSet(count int) []*http.Client {
-    ret := make([]*http.Client, count)
-    for i := range ret {
-        ret[i] = &http.Client{
-            Timeout: time.Duration(TIMEOUT_SEC) * time.Second,
-            Transport: &http.Transport{
-                MaxIdleConns:        1000,
-                MaxConnsPerHost:     1000,
-                MaxIdleConnsPerHost: 1000,
-                IdleConnTimeout:     90 * time.Second,
-                TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-            },
-        }
-    }
-    return ret
+var http1Client = &http.Client{
+    Timeout: time.Duration(TIMEOUT_SEC) * time.Second,
+    Transport: &http.Transport{
+        MaxIdleConns:        1000,
+        MaxConnsPerHost:     1000,
+        MaxIdleConnsPerHost: 1000,
+        IdleConnTimeout:     90 * time.Second,
+        TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+    },
 }
 
-func makeHttp2ClientSet(count int) []*http.Client {
-    ret := make([]*http.Client, count)
-    for i := range ret {
-        ret[i] = &http.Client{
-            Timeout: time.Duration(TIMEOUT_SEC) * time.Second,
-            Transport: &http2.Transport{
-                TLSClientConfig:    &tls.Config{InsecureSkipVerify: true},
-                DisableCompression: true,
-                AllowHTTP:           true,
-               // MaxReadFrameSize:     262144 * 4, // defaults to 16k
-                CountError: func(errType string) {
-                    println(errType)
-                },
+var http2Client = &http.Client{
+    Timeout: time.Duration(TIMEOUT_SEC) * time.Second,
+    Transport: &http2.Transport{
+        TLSClientConfig:    &tls.Config{InsecureSkipVerify: true},
+        DisableCompression: true,
+        AllowHTTP:           true,
+       // MaxReadFrameSize:     262144 * 4, // defaults to 16k
+        CountError: func(errType string) {
+            println(errType)
+        },
 
-            },
-        }
-    }
-    return ret
-}
-
-func initHttpClients (count int) {
-    http1Clients = makeHttp1ClientSet(count)
-    http2Clients = makeHttp2ClientSet(count)
-    http2ClientsRaw = makeHttp2ClientSet(count)
+    },
 }
 
 func acceptHeader(format string) string {
@@ -90,21 +67,9 @@ func sendRequest(log Log, opts *Options) RequestResult {
     var client *http.Client
 
     if opts.HttpVersion == 1 {
-        index := rand.Intn(len(http1Clients))
-        client = http1Clients[index]
+        client = http1Client
     } else {
-        if opts.ClientPerFormat {
-            if log.Format == "raw" {
-                index := rand.Intn(len(http2ClientsRaw))
-                client = http2ClientsRaw[index]
-            } else {
-                index := rand.Intn(len(http2Clients))
-                client = http2Clients[index]
-            }
-        } else {
-            index := rand.Intn(len(http2Clients))
-            client = http2Clients[index]
-        }
+        client = http2Client
     }
 
     headers := map[string][]string{

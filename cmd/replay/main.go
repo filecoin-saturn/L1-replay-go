@@ -26,8 +26,6 @@ type Options struct {
 	LogFilePath     string `json:"logFilePath"`
 	DurationMinutes int    `json:"durationMinutes"`
 	NumLogs         int    `json:"numLogs"`
-	NumClients      int    `json:"numClients"`
-	ClientPerFormat bool   `json:"clientPerFormat"`
 	HttpVersion     int    `json:"httpVersion"`
 	IpAddress       string `json:"ipAddress"`
 }
@@ -322,15 +320,12 @@ func replay(opts *Options) error {
 }
 
 func parseOptions() *Options {
-    var logFilePath, ipAddress string
-    var durationMinutes, numLogs, numClients, httpVersion int
-    var clientPerFormat bool
+    var logFilePath, ipAddress, compareIp string
+    var durationMinutes, numLogs, httpVersion int
 
     flag.StringVar(&logFilePath, "f", LOG_FILE, "path to log file")
     flag.IntVar(&durationMinutes, "d", 0, "duration of test based on log timestampts (not wall clock time)")
     flag.IntVar(&numLogs, "n", 0, "number of logs to replay")
-    flag.IntVar(&numClients, "c", 1, "number of concurrent clients to simulate")
-    flag.BoolVar(&clientPerFormat, "clientPerFormat", false, "use separate clients for each log format")
     flag.IntVar(&httpVersion, "http", 1, "HTTP version to use")
     flag.StringVar(&ipAddress, "ip", "", "IP address of L1 node")
     flag.Parse()
@@ -339,11 +334,11 @@ func parseOptions() *Options {
         LogFilePath:     logFilePath,
         DurationMinutes: durationMinutes,
         NumLogs:         numLogs,
-        NumClients:      numClients,
-        ClientPerFormat: clientPerFormat,
         HttpVersion:     httpVersion,
         IpAddress:       ipAddress,
+        CompareIpAddress:       compareIp,
     }
+}
 }
 
 // go run cmd/replay/*.go -n 3 -http 2 -ip 51.161.35.66 -c 1
